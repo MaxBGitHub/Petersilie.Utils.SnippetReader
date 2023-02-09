@@ -3,26 +3,157 @@ using System;
 using System.Drawing;
 using System.Drawing.Imaging;
 using System.IO;
+using System.Linq;
 using System.Runtime.ConstrainedExecution;
+using System.Runtime.InteropServices;
 using System.Threading.Tasks;
+using System.Windows.Forms;
 using Tesseract;
 namespace Petersilie.Utils.SnippetReader.OCR
 {
     internal static class ImageToText
     {
-        private static double[] GetHistogram(Bitmap bmp)
+        const int BIT_PER_BYTE = 8;
+
+
+        private static readonly Func<Bitmap, int> GetBitPerPixel = (bmp) =>
+        {
+            return Bitmap.GetPixelFormatSize(bmp.PixelFormat) / BIT_PER_BYTE;
+        };
+
+
+        private static readonly Func<Bitmap, ImageLockMode, BitmapData> GetImageData = (bmp, mode) =>
+        {
+            if (bmp == null) {
+                return null;
+            }
+
+            try {
+                var data = bmp.LockBits(
+                    new Rectangle(0, 0, bmp.Width, bmp.Height),
+                    mode, bmp.PixelFormat
+                );
+                return data;
+            }
+            catch {
+                return null;
+            }
+        };
+
+
+        private static void ApplyThreshold(int threshold, ref Bitmap bmp)
         {
             BitmapData imageData = null;
             try
             {
-                imageData = bmp.LockBits(
-                    new Rectangle(0, 0, bmp.Width, bmp.Height), 
-                    ImageLockMode.ReadOnly, 
-                    bmp.PixelFormat
-                );
+                imageData = GetImageData(bmp, ImageLockMode.ReadWrite);
+                int bpp = GetBitPerPixel(bmp);
 
+                unsafe
+                {
+                    byte* ptStride = (byte*)imageData.Scan0;
+                    Parallel.For(0, bmp.Height, y =>
+                    {
+                        byte* ptPixel = ptStride + (y * imageData.Stride);
+                        for (int x = 0; x < imageData.Stride; x+= bpp)
+                        {
+                            ptPixel[x+2] = (byte)(ptPixel[x+2] <= threshold ? 255 : 0);
+                            ptPixel[x+1] = (byte)(ptPixel[x+1] <= threshold ? 255 : 0);
+                            ptPixel[x] = (byte)(ptPixel[x] <= threshold ? 255 : 0);
+                        }
+                    });
+                }
+            }
+            finally
+            {
+                if (imageData != null) {
+                    bmp.UnlockBits(imageData);
+                }
+            }
+        }
+
+
+
+        private static void ApplyAdaptiveThreshold(ref Bitmap bmp)
+        {
+            BitmapData imageData = null;
+            try
+            {
+                imageData = GetImageData(bmp, ImageLockMode.ReadWrite);
+                int bpp = GetBitPerPixel(bmp);
+            }
+            catch
+            {
+                if (imageData != null) {
+                    bmp.UnlockBits(imageData);
+                }
+            }
+        }
+
+
+        private static int GetGlobalMeanThreshold(int[] histogram, Bitmap bmp)
+        {
+            int nBytes;
+            byte[] buffer;
+            BitmapData imageData = null;
+
+            try {
+                imageData = GetImageData(bmp, ImageLockMode.ReadOnly);
+                nBytes = imageData.Stride * imageData.Height;
+                buffer = new byte[nBytes];
+
+                Marshal.Copy(imageData.Scan0, buffer, 0, nBytes);
+            }
+            finally {
+                if (imageData != null) {
+                    bmp.UnlockBits(imageData);
+                }
+            }
+
+            int[] converted = buffer.Select(x => (int)x).ToArray();
+            int init = converted.Sum() / nBytes;
+            int delta = 1;
+
+            while (delta > 0)
+            {
+                int mean1 = 0;
+                int mean2 = 0;
+                int sum1 = 0;
+                int sum2 = 0;
+
+                for (int i = 0; i < 255; i++)
+                {
+                    if (i <= init)
+                    {
+                        mean1 += histogram[i] * i;
+                        sum1 += histogram[i];
+                    }
+                    else
+                    {
+                        mean2 += histogram[i] * i;
+                        sum2 += histogram[i];
+                    }
+                }
+
+                mean1 /= sum1;
+                mean2 /= sum2;
+                delta = init;
+                init = (mean1 + mean2) / 2;
+                delta = Math.Abs(delta - init);
+            }
+            return init;
+        }
+
+
+        private static int[] GetHistogram(Bitmap bmp)
+        {
+            BitmapData imageData = null;
+            try
+            {
+                imageData = GetImageData(bmp, ImageLockMode.ReadOnly);
+                
                 object histLock = new object();
-                double[] hist = new double[256];
+                int[] hist = new int[256];
                 unsafe
                 {
                     byte* ptStride = (byte*)imageData.Scan0;
@@ -31,8 +162,7 @@ namespace Petersilie.Utils.SnippetReader.OCR
                         byte* ptPixel = ptStride + (y * imageData.Stride);
                         for (int x = 0; x < imageData.Stride; x++) 
                         {
-                            lock (histLock) 
-                            {
+                            lock (histLock)  {
                                 hist[ptPixel[x + 2]]++;
                                 hist[ptPixel[x + 1]]++;
                                 hist[ptPixel[x    ]]++;
@@ -50,56 +180,18 @@ namespace Petersilie.Utils.SnippetReader.OCR
             }
         }
 
-        const double YUV_FACT_R = 0.299;
-        const double YUV_FACT_G = 0.587;
-        const double YUV_FACT_B = 0.114;
-
-        [Obsolete("Use Get8BitGrayscale(Bitmap) instead")]
-        private static void ApplyGrayscale(ref Bitmap bmp)
-        {
-            BitmapData imageData = null;
-            try
-            {
-                imageData = bmp.LockBits(
-                    new Rectangle(0, 0, bmp.Width, bmp.Height),
-                    ImageLockMode.ReadWrite,
-                    bmp.PixelFormat
-                );
-
-                unsafe
-                {
-                    int bpp = Bitmap.GetPixelFormatSize(bmp.PixelFormat) / 8;
-                    byte * ptStride = (byte*)imageData.Scan0;
-                    Parallel.For(0, imageData.Height, y => {
-                        byte* ptPixel = ptStride + (y * imageData.Stride);
-                        for (int x=0; x< imageData.Stride; x+=bpp) {
-                            byte yuvLuma = (byte)(
-                                  (byte)(ptPixel[x + 2] * YUV_FACT_R)
-                                + (byte)(ptPixel[x + 1] * YUV_FACT_G)
-                                + (byte)(ptPixel[x    ] * YUV_FACT_B)
-                            );
-                            ptPixel[x    ] = yuvLuma;
-                            ptPixel[x + 1] = yuvLuma;
-                            ptPixel[x + 2] = yuvLuma;
-                        }
-                    });
-                }
-            }
-            finally
-            {
-                if (imageData != null ) {
-                    bmp.UnlockBits( imageData );
-                }
-            }
-        }
-
 
         private static Bitmap Get8BitGrayscale(Bitmap bmp)
         {
-            int w = bmp.Width;
-            int h = bmp.Height;
+            const double YUV_FACT_R = 0.299;
+            const double YUV_FACT_G = 0.587;
+            const double YUV_FACT_B = 0.114;
 
-            Bitmap dst = new Bitmap(w, h, PixelFormat.Format8bppIndexed);
+            Bitmap dst = new Bitmap(
+                bmp.Width, bmp.Height, 
+                PixelFormat.Format8bppIndexed
+            );
+
             var palette = dst.Palette;
             for (int i=0; i<256; i++) {
                 palette.Entries[i] = Color.FromArgb(255, i, i, i);
@@ -110,26 +202,17 @@ namespace Petersilie.Utils.SnippetReader.OCR
             BitmapData dstData = null;
             try
             {
-                srcData = bmp.LockBits(
-                    new Rectangle(0, 0, w, h),
-                    ImageLockMode.ReadOnly,
-                    bmp.PixelFormat
-                );
+                srcData = GetImageData(bmp, ImageLockMode.ReadOnly);
+                dstData = GetImageData(dst, ImageLockMode.WriteOnly);
 
-                dstData = dst.LockBits(
-                    new Rectangle(0, 0, w, h),
-                    ImageLockMode.WriteOnly,
-                    dst.PixelFormat
-                );
-
-                int srcBpp = Bitmap.GetPixelFormatSize(srcData.PixelFormat) / 8;
+                int srcBpp = GetBitPerPixel(bmp);
                 object dstLock = new object();
 
                 unsafe
                 {
                     byte* ptSrcStride = (byte*)srcData.Scan0;
                     byte* ptDstStride = (byte*)dstData.Scan0;
-                    for (int y = 0; y < h; y++) 
+                    for (int y = 0; y < srcData.Height; y++) 
                     {
                         byte* ptSrcPixel = ptSrcStride + (y * srcData.Stride);
                         byte* ptDstPixel = ptDstStride + (y * dstData.Stride);
@@ -177,17 +260,15 @@ namespace Petersilie.Utils.SnippetReader.OCR
             }
 
             string language = CultureSettings.GetUILanguage();
-
+            // Convert to 8-bit grayscale image.
             var mono = Get8BitGrayscale(image);
-            //
-            // TODO
-            // ====
-            // Calculate global threshold for image by using histogram.
-            // Apply threshold and compare amount of text extracted
-            // against method with no gobal threshold.
-            //
-            var threshold = GetHistogram(mono);
-
+            // Get histogram of image.
+            var hist = GetHistogram(mono);
+            // Calculate the global mean threshold.
+            int globalThreshold = GetGlobalMeanThreshold(hist, mono);
+            // Apply the global threshold to the image.
+            ApplyThreshold(globalThreshold, ref mono);
+            
             //
             // TODO
             // ====
