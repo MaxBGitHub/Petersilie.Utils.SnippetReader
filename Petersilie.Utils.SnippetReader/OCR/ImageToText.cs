@@ -107,10 +107,12 @@ namespace Petersilie.Utils.SnippetReader.OCR
             finally {
                 if (imageData != null) {
                     bmp.UnlockBits(imageData);
-                }
+                }                
             }
 
             int[] converted = buffer.Select(x => (int)x).ToArray();
+            buffer = null;
+
             int init = converted.Sum() / nBytes;
             int delta = 1;
 
@@ -262,6 +264,8 @@ namespace Petersilie.Utils.SnippetReader.OCR
             string language = CultureSettings.GetUILanguage();
             // Convert to 8-bit grayscale image.
             var mono = Get8BitGrayscale(image);
+            // Dispose unused image now to free up memory.
+            image.Dispose();
             // Get histogram of image.
             var hist = GetHistogram(mono);
             // Calculate the global mean threshold.
@@ -282,7 +286,11 @@ namespace Petersilie.Utils.SnippetReader.OCR
             //    with no pre-processing and global threshold.
             //
 
+            // Load image bytes into memory.
             byte[] imageBytes = LoadToMemory(mono);
+            // Dispose image as it is not needed anymore.
+            // Frees up memory.
+            mono.Dispose();
             if (imageBytes.Length < 1) {
                 return string.Empty;
             }

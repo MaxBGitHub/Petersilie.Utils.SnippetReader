@@ -20,7 +20,8 @@ namespace Petersilie.Utils.SnippetReader
         private void Overlay_SnippetReady(object sender, SnippetReadyEventArgs e)
         {
             var test = OCR.ImageToText.GetText(e.Snippet);
-            if (string.IsNullOrEmpty(test)) {
+            e.Snippet?.Dispose();
+            if (string.IsNullOrEmpty(test)) {                
                 System.Diagnostics.Debug.WriteLine("No text extracted.");
                 return;
             }
