@@ -273,9 +273,6 @@ namespace Petersilie.Utils.SnippetReader
                 screen.Bounds.X, 
                 screen.Bounds.Y
             );
-
-            System.Diagnostics.Debug.WriteLine(this.Location);
-            System.Diagnostics.Debug.WriteLine(this.Screen);
         }
     }
 }

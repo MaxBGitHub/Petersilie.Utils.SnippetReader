@@ -194,18 +194,16 @@ namespace Petersilie.Utils.SnippetReader.OCR
                 unsafe
                 {
                     byte* ptStride = (byte*)imageData.Scan0;
-                    Parallel.For(0, imageData.Height, y => 
+                    for (int y = 0;  y < imageData.Height; y++)
                     {
                         byte* ptPixel = ptStride + (y * imageData.Stride);
                         for (int x = 0; x < imageData.Stride; x++) 
-                        {
-                            lock (histLock)  {
-                                hist[ptPixel[x + 2]]++;
-                                hist[ptPixel[x + 1]]++;
-                                hist[ptPixel[x    ]]++;
-                            }
+                        {                     
+                            hist[ptPixel[x + 2]]++;
+                            hist[ptPixel[x + 1]]++;
+                            hist[ptPixel[x    ]]++;
                         }
-                    });
+                    }
                 }
                 return hist;
             }
@@ -279,6 +277,50 @@ namespace Petersilie.Utils.SnippetReader.OCR
         }
 
 
+        private static Bitmap ResizeIfRequired(Bitmap src)
+        {
+            const int MIN_ASPECT_X = 640;
+            const int MIN_ASPECT_Y = 480;
+
+            int aspect = 0;
+            int w = src.Width;
+            int h = src.Height;
+
+            if (w < h) {
+                aspect = MIN_ASPECT_X;
+            }
+            else {
+                aspect = MIN_ASPECT_Y;
+            }
+
+            float ratio = aspect / Math.Min(w, h);
+            if (ratio <= 0) {
+                return src;
+            }
+
+            var destRect = new Rectangle(0, 0, Math.Abs((int)(w * ratio)), Math.Abs((int)(h * ratio)));
+            var destImage = new Bitmap(destRect.Width, destRect.Height, src.PixelFormat);
+            destImage.SetResolution(src.HorizontalResolution* ratio, src.VerticalResolution* ratio);
+
+            using (var gr = Graphics.FromImage(destImage))
+            {
+                gr.CompositingMode = System.Drawing.Drawing2D.CompositingMode.SourceCopy;
+                gr.CompositingQuality = System.Drawing.Drawing2D.CompositingQuality.HighQuality;
+                gr.InterpolationMode = System.Drawing.Drawing2D.InterpolationMode.HighQualityBicubic;
+                gr.SmoothingMode = System.Drawing.Drawing2D.SmoothingMode.HighQuality;
+                gr.PixelOffsetMode = System.Drawing.Drawing2D.PixelOffsetMode.HighQuality;
+                gr.TextRenderingHint = System.Drawing.Text.TextRenderingHint.AntiAliasGridFit;
+
+                using (var mode = new ImageAttributes())
+                {
+                    mode.SetWrapMode(System.Drawing.Drawing2D.WrapMode.TileFlipXY);
+                    gr.DrawImage(src, destRect, 0, 0, src.Width, src.Height, GraphicsUnit.Pixel);
+                }
+            }
+            return destImage;
+        }
+
+
         private static byte[] LoadToMemory(Bitmap image)
         {   
             byte[] result = null;
@@ -297,17 +339,20 @@ namespace Petersilie.Utils.SnippetReader.OCR
             }
 
             string language = CultureSettings.GetUILanguage();
+
+            image = ResizeIfRequired(image);
             // Convert to 8-bit grayscale image.
             var mono = Get8BitGrayscale(image);
             // Dispose unused image now to free up memory.
             image.Dispose();
+
             // Get histogram of image.
             var hist = GetHistogram(mono);
             // Calculate the global mean threshold.
-            int globalThreshold = GetGlobalThreshold(hist, mono);
+            int globalThreshold = GetGlobalThreshold(hist, mono);            
             // Apply the global threshold to the image.
-            mono = ApplyThreshold(globalThreshold, mono);
-            
+            mono = ApplyThreshold(globalThreshold, mono);            
+            mono.Save("c:\\users\\max\\desktop\\resized_pre_processed.png", System.Drawing.Imaging.ImageFormat.Png);
             //
             // TODO
             // ====
@@ -342,10 +387,7 @@ namespace Petersilie.Utils.SnippetReader.OCR
                     {
                         using (var page = engine.Process(tessImage))
                         {
-                            resultText = page.GetText();
-                            if (resultText == string.Empty) {
-                                // try pre-processing.
-                            }
+                            resultText = page.GetText().TrimEnd().TrimStart();
                         }
                     }
                 }
