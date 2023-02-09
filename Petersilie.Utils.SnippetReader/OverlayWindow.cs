@@ -53,17 +53,25 @@ namespace Petersilie.Utils.SnippetReader
             int w = (int)Math.Abs(_previousCapture.Width);
             int h = (int)Math.Abs(_previousCapture.Height);
 
-            Bitmap screenMap = new Bitmap(
-                w, h, PixelFormat.Format32bppArgb
-            );
-            
-            Point ptTopLeft = this.PointToScreen(new Point(x, y));
+            try
+            {
+                Bitmap screenMap = new Bitmap(
+                    w, h, PixelFormat.Format32bppArgb
+                );
 
-            using (var destGr = Graphics.FromImage(screenMap)) {
-                Size sz = new Size(w, h);
-                destGr.CopyFromScreen(ptTopLeft.X, ptTopLeft.Y, 0, 0, sz);
+                Point ptTopLeft = this.PointToScreen(new Point(x, y));
+
+                using (var destGr = Graphics.FromImage(screenMap))
+                {
+                    Size sz = new Size(w, h);
+                    destGr.CopyFromScreen(ptTopLeft.X, ptTopLeft.Y, 0, 0, sz);
+                }
+                return screenMap;
             }
-            return screenMap;
+            catch {
+                return null;
+            }
+            
         }
 
 
@@ -156,8 +164,6 @@ namespace Petersilie.Utils.SnippetReader
 
         protected override void OnMouseUp(MouseEventArgs e)
         {
-            //base.OnMouseUp(e);
-
             // Do not close if screen capture is activated
             if (e.Button != MouseButtons.Left && _activated) {            
                 return;
@@ -169,13 +175,14 @@ namespace Petersilie.Utils.SnippetReader
 
             _activated = false;
             Bitmap result = CaptureScreen();
-            Shutdown();
-            OnSnippetReadyInternal(result);
+            if (result != null) {
+                OnSnippetReadyInternal(result);
+            }
+            Shutdown();            
         }
 
         protected override void OnMouseDown(MouseEventArgs e)
         {
-            //base.OnMouseDown(e);
             if (e.Button != MouseButtons.Left && !_activated) {
                 Shutdown();
             }

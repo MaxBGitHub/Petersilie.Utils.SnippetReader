@@ -41,25 +41,30 @@ namespace Petersilie.Utils.SnippetReader.OCR
         };
 
 
-        private static void ApplyThreshold(int threshold, ref Bitmap bmp)
+        private static Bitmap ApplyThreshold(int threshold, Bitmap bmp)
         {
+            Bitmap dst = null;
             BitmapData imageData = null;
+            BitmapData dstData = null;
             try
             {
-                imageData = GetImageData(bmp, ImageLockMode.ReadWrite);
+                dst = new Bitmap(bmp.Width, bmp.Height, bmp.PixelFormat);
+                imageData = GetImageData(bmp, ImageLockMode.ReadOnly);
+                dstData = GetImageData(dst, ImageLockMode.WriteOnly);
                 int bpp = GetBitPerPixel(bmp);
 
                 unsafe
                 {
                     byte* ptStride = (byte*)imageData.Scan0;
-                    Parallel.For(0, bmp.Height, y =>
+                    byte* ptDstStride = (byte*)dstData.Scan0;
+                    Parallel.For(0, imageData.Height, y =>
                     {
                         byte* ptPixel = ptStride + (y * imageData.Stride);
-                        for (int x = 0; x < imageData.Stride; x+= bpp)
-                        {
-                            ptPixel[x+2] = (byte)(ptPixel[x+2] <= threshold ? 255 : 0);
-                            ptPixel[x+1] = (byte)(ptPixel[x+1] <= threshold ? 255 : 0);
-                            ptPixel[x] = (byte)(ptPixel[x] <= threshold ? 255 : 0);
+                        byte* ptDstPixel = ptDstStride + (y * dstData.Stride);
+                        for (int x = 0; x < imageData.Stride; x+= bpp) {
+                            ptDstPixel[x + 2] = (byte)(ptPixel[x+2] <= threshold ? 255 : 0);
+                            ptDstPixel[x + 1] = (byte)(ptPixel[x+1] <= threshold ? 255 : 0);
+                            ptDstPixel[x    ] = (byte)(ptPixel[x] <= threshold ? 255 : 0);
                         }
                     });
                 }
@@ -69,29 +74,59 @@ namespace Petersilie.Utils.SnippetReader.OCR
                 if (imageData != null) {
                     bmp.UnlockBits(imageData);
                 }
+
+                if (dstData != null && dst != null) {
+                    dst.UnlockBits(dstData);
+                }
             }
+            return dst;
         }
 
 
 
-        private static void ApplyAdaptiveThreshold(ref Bitmap bmp)
+        private static Bitmap ApplyAdaptiveThreshold(Bitmap bmp, uint blockSize = 3)
         {
+            if (blockSize == 1) {
+                throw new ArgumentException("Block size has to be greater than 1.");
+            }
+
+            if (blockSize % 2 == 0) {
+                throw new ArgumentException("Block size cannot be even.");
+            }
+
+            Bitmap dst = null;
             BitmapData imageData = null;
+            BitmapData dstData = null;
             try
             {
-                imageData = GetImageData(bmp, ImageLockMode.ReadWrite);
+                dst = new Bitmap(bmp.Width, bmp.Height, bmp.PixelFormat);
+                imageData = GetImageData(bmp, ImageLockMode.ReadOnly);
+                dstData = GetImageData(dst, ImageLockMode.WriteOnly);
                 int bpp = GetBitPerPixel(bmp);
+
+                unsafe
+                {
+                    byte* ptStride = (byte*)imageData.Scan0;
+                    byte* ptDstStride = (byte*)dstData.Scan0;
+
+                    
+                }
             }
             catch
             {
                 if (imageData != null) {
                     bmp.UnlockBits(imageData);
                 }
+
+                if (dst != null && dstData != null) {
+                    dst.UnlockBits(dstData);
+                }
             }
+            return null;
         }
 
 
-        private static int GetGlobalMeanThreshold(int[] histogram, Bitmap bmp)
+        private static int GetGlobalThreshold(int[] histogram, Bitmap bmp)
         {
             int nBytes;
             byte[] buffer;
@@ -269,9 +304,9 @@ namespace Petersilie.Utils.SnippetReader.OCR
             // Get histogram of image.
             var hist = GetHistogram(mono);
             // Calculate the global mean threshold.
-            int globalThreshold = GetGlobalMeanThreshold(hist, mono);
+            int globalThreshold = GetGlobalThreshold(hist, mono);
             // Apply the global threshold to the image.
-            ApplyThreshold(globalThreshold, ref mono);
+            mono = ApplyThreshold(globalThreshold, mono);
             
             //
             // TODO
